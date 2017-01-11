@@ -7,6 +7,7 @@ import os
 import gevent
 
 from DbCursor import DbCursor
+from Config import config
 
 opened_dbs = []
 
@@ -16,7 +17,8 @@ def dbCleanup():
     while 1:
         time.sleep(60 * 5)
         for db in opened_dbs[:]:
-            if time.time() - db.last_query_time > 60 * 3:
+            idle = time.time() - db.last_query_time
+            if idle > 60 * 5:
                 db.close()
 
 gevent.spawn(dbCleanup)
@@ -37,6 +39,8 @@ class Db(object):
         self.foreign_keys = False
         self.query_stats = {}
         self.db_keyvalues = {}
+        self.delayed_queue = []
+        self.delayed_queue_thread = None
         self.last_query_time = time.time()
 
     def __repr__(self):
@@ -45,8 +49,7 @@ class Db(object):
     def connect(self):
         if self not in opened_dbs:
             opened_dbs.append(self)
-
-        self.log.debug("Connecting to %s (sqlite version: %s)..." % (self.db_path, sqlite3.version))
+        s = time.time()
         if not os.path.isdir(self.db_dir):  # Directory not exist yet
             os.makedirs(self.db_dir)
             self.log.debug("Created Db path: %s" % self.db_dir)
@@ -57,12 +60,14 @@ class Db(object):
         self.conn.isolation_level = None
         self.cur = self.getCursor()
         # We need more speed then security
-        self.cur.execute("PRAGMA journal_mode = WAL")
         self.cur.execute("PRAGMA journal_mode = MEMORY")
         self.cur.execute("PRAGMA synchronous = OFF")
         if self.foreign_keys:
             self.execute("PRAGMA foreign_keys = ON")
-
+        self.log.debug(
+            "Connected to %s in %.3fs (opened: %s, sqlite version: %s)..." %
+            (self.db_path, time.time() - s, len(opened_dbs), sqlite3.version)
+        )
 
     # Execute query using dbcursor
     def execute(self, query, params=None):
@@ -71,8 +76,49 @@ class Db(object):
             self.connect()
         return self.cur.execute(query, params)
 
+    def insertOrUpdate(self, *args, **kwargs):
+        self.last_query_time = time.time()
+        if not self.conn:
+            self.connect()
+        return self.cur.insertOrUpdate(*args, **kwargs)
+
+    def executeDelayed(self, *args, **kwargs):
+        if not self.delayed_queue_thread:
+            self.delayed_queue_thread = gevent.spawn_later(10, self.processDelayed)
+        self.delayed_queue.append(("execute", (args, kwargs)))
+
+    def insertOrUpdateDelayed(self, *args, **kwargs):
+        if not self.delayed_queue:
+            gevent.spawn_later(1, self.processDelayed)
+        self.delayed_queue.append(("insertOrUpdate", (args, kwargs)))
+
+    def processDelayed(self):
+        if not self.delayed_queue:
+            self.log.debug("processDelayed aborted")
+            return
+        self.last_query_time = time.time()
+        if not self.conn:
+            self.connect()
+
+        s = time.time()
+        cur = self.getCursor()
+        cur.execute("BEGIN")
+        for command, params in self.delayed_queue:
+            if command == "insertOrUpdate":
+                cur.insertOrUpdate(*params[0], **params[1])
+            else:
+                cur.execute(*params[0], **params[1])
+
+        cur.execute("END")
+        if len(self.delayed_queue) > 10:
+            self.log.debug("Processed %s delayed queue in %.3fs" % (len(self.delayed_queue), time.time() - s))
+        self.delayed_queue = []
+        self.delayed_queue_thread = None
+
     def close(self):
-        self.log.debug("Closing, opened: %s" % opened_dbs)
+        s = time.time()
+        if self.delayed_queue:
+            self.processDelayed()
         if self in opened_dbs:
             opened_dbs.remove(self)
         if self.cur:
@@ -81,6 +127,7 @@ class Db(object):
             self.conn.close()
         self.conn = None
         self.cur = None
+        self.log.debug("%s closed in %.3fs, opened: %s" % (self.db_path, time.time() - s, len(opened_dbs)))
 
     # Gets a cursor object to database
     # Return: Cursor class
@@ -92,16 +139,9 @@ class Db(object):
     # Get the table version
     # Return: Table version or None if not exist
     def getTableVersion(self, table_name):
-        """if not self.table_names: # Get existing table names
-                res = self.cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                self.table_names = [row["name"] for row in res]
-        if table_name not in self.table_names:
-                return False
-
-        else:"""
         if not self.db_keyvalues:  # Get db keyvalues
             try:
-                res = self.cur.execute("SELECT * FROM keyvalue WHERE json_id=0")  # json_id = 0 is internal keyvalues
+                res = self.execute("SELECT * FROM keyvalue WHERE json_id=0")  # json_id = 0 is internal keyvalues
             except sqlite3.OperationalError, err:  # Table not exist
                 self.log.debug("Query error: %s" % err)
                 return False
@@ -126,7 +166,7 @@ class Db(object):
             ["keyvalue_id", "INTEGER PRIMARY KEY AUTOINCREMENT"],
             ["key", "TEXT"],
             ["value", "INTEGER"],
-            ["json_id", "INTEGER REFERENCES json (json_id)"],
+            ["json_id", "INTEGER"],
         ], [
             "CREATE UNIQUE INDEX key_id ON keyvalue(json_id, key)"
         ], version=self.schema["version"])
@@ -141,13 +181,22 @@ class Db(object):
             ], [
                 "CREATE UNIQUE INDEX path ON json(path)"
             ], version=self.schema["version"])
-        else:
+        elif self.schema["version"] == 2:
             changed = cur.needTable("json", [
                 ["json_id", "INTEGER PRIMARY KEY AUTOINCREMENT"],
                 ["directory", "VARCHAR(255)"],
                 ["file_name", "VARCHAR(255)"]
             ], [
                 "CREATE UNIQUE INDEX path ON json(directory, file_name)"
+            ], version=self.schema["version"])
+        elif self.schema["version"] == 3:
+            changed = cur.needTable("json", [
+                ["json_id", "INTEGER PRIMARY KEY AUTOINCREMENT"],
+                ["site", "VARCHAR(255)"],
+                ["directory", "VARCHAR(255)"],
+                ["file_name", "VARCHAR(255)"]
+            ], [
+                "CREATE UNIQUE INDEX path ON json(directory, site, file_name)"
             ], version=self.schema["version"])
         if changed:
             changed_tables.append("json")
@@ -185,9 +234,17 @@ class Db(object):
             return False
 
         # Load the json file
-        if not file:
-            file = open(file_path)
-        data = json.load(file)
+        try:
+            if file is None:  # Open file is not file object passed
+                file = open(file_path)
+
+            if file is False:  # File deleted
+                data = {}
+            else:
+                data = json.load(file)
+        except Exception, err:
+            self.log.debug("Json file %s load error: %s" % (file_path, err))
+            data = {}
 
         # No cursor specificed
         if not cur:
@@ -198,13 +255,14 @@ class Db(object):
         else:
             commit_after_done = False
 
-        # Row for current json file
-        json_row = cur.getJsonRow(relative_path)
+        # Row for current json file if required
+        if filter(lambda dbmap: "to_keyvalue" in dbmap or "to_table" in dbmap, matched_maps):
+            json_row = cur.getJsonRow(relative_path)
 
         # Check matched mappings in schema
-        for map in matched_maps:
+        for dbmap in matched_maps:
             # Insert non-relational key values
-            if map.get("to_keyvalue"):
+            if dbmap.get("to_keyvalue"):
                 # Get current values
                 res = cur.execute("SELECT * FROM keyvalue WHERE json_id = ?", (json_row["json_id"],))
                 current_keyvalue = {}
@@ -213,7 +271,7 @@ class Db(object):
                     current_keyvalue[row["key"]] = row["value"]
                     current_keyvalue_id[row["key"]] = row["keyvalue_id"]
 
-                for key in map["to_keyvalue"]:
+                for key in dbmap["to_keyvalue"]:
                     if key not in current_keyvalue:  # Keyvalue not exist yet in the db
                         cur.execute(
                             "INSERT INTO keyvalue ?",
@@ -225,15 +283,21 @@ class Db(object):
                             (data.get(key), current_keyvalue_id[key])
                         )
 
-            """
-            for key in map.get("to_keyvalue", []):
-                cur.execute("INSERT OR REPLACE INTO keyvalue ?",
-                    {"key": key, "value": data.get(key), "json_id": json_row["json_id"]}
-                )
-            """
+            # Insert data to json table for easier joins
+            if dbmap.get("to_json_table"):
+                directory, file_name = re.match("^(.*?)/*([^/]*)$", relative_path).groups()
+                data_json_row = dict(cur.getJsonRow(directory + "/" + dbmap.get("file_name", file_name)))
+                changed = False
+                for key in dbmap["to_json_table"]:
+                    if data.get(key) != data_json_row.get(key):
+                        changed = True
+                if changed:
+                    # Add the custom col values
+                    data_json_row.update({key: val for key, val in data.iteritems() if key in dbmap["to_json_table"]})
+                    cur.execute("INSERT OR REPLACE INTO json ?", data_json_row)
 
             # Insert data to tables
-            for table_settings in map.get("to_table", []):
+            for table_settings in dbmap.get("to_table", []):
                 if isinstance(table_settings, dict):  # Custom settings
                     table_name = table_settings["table"]  # Table name to insert datas
                     node = table_settings.get("node", table_name)  # Node keyname in data json file
@@ -248,6 +312,10 @@ class Db(object):
                     val_col = None
                     import_cols = None
                     replaces = None
+
+                # Fill import cols from table cols
+                if not import_cols:
+                    import_cols = set(map(lambda item: item[0], self.schema["tables"][table_name]["cols"]))
 
                 cur.execute("DELETE FROM %s WHERE json_id = ?" % table_name, (json_row["json_id"],))
 
@@ -265,7 +333,7 @@ class Db(object):
                             if isinstance(val, dict):  # Single row
                                 row = val
                                 if import_cols:
-                                    row = {key: row[key] for key in import_cols}  # Filter row by import_cols
+                                    row = {key: row[key] for key in row if key in import_cols}  # Filter row by import_cols
                                 row[key_col] = key
                                 # Replace in value if necessary
                                 if replaces:
@@ -284,7 +352,14 @@ class Db(object):
                 else:  # Map as list
                     for row in data[node]:
                         row["json_id"] = json_row["json_id"]
+                        if import_cols:
+                            row = {key: row[key] for key in row if key in import_cols}  # Filter row by import_cols
                         cur.execute("INSERT OR REPLACE INTO %s ?" % table_name, row)
+
+        # Cleanup json row
+        if not data:
+            self.log.debug("Cleanup json row for %s" % file_path)
+            cur.execute("DELETE FROM json WHERE json_id = %s" % json_row["json_id"])
 
         if commit_after_done:
             cur.execute("COMMIT")

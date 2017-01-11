@@ -57,8 +57,6 @@ class TestPeer:
     def testHashfield(self, site):
         sample_hash = site.content_manager.contents["content.json"]["files_optional"].values()[0]["sha512"]
 
-        assert not site.content_manager.hashfield
-
         site.storage.verifyFiles(quick_check=True)  # Find what optional files we have
 
         # Check if hashfield has any files
@@ -155,3 +153,10 @@ class TestPeer:
             1234: [('1.2.3.4', 1544), ('1.2.3.5', 1545)],
             1235: [('1.2.3.5', 1545), ('1.2.3.6', 1546)]
         }
+
+        # Test my address adding
+        site.content_manager.hashfield.append(1234)
+
+        res = peer_file_server.findHashIds([1234, 1235])
+        assert res[1234] == [('1.2.3.4', 1544), ('1.2.3.5', 1545), ("127.0.0.1", 1544)]
+        assert res[1235] == [('1.2.3.5', 1545), ('1.2.3.6', 1546)]

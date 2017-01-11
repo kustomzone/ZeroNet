@@ -8,6 +8,8 @@
 
 import sys
 import ctypes
+import logging
+import os
 
 OpenSSL = None
 
@@ -432,9 +434,11 @@ def openLibrary():
     global OpenSSL
     try:
         if sys.platform.startswith("win"):
-            dll_path = "src/lib/opensslVerify/libeay32.dll"
+            dll_path = os.path.normpath(os.path.dirname(__file__) + "/../opensslVerify/" + "libeay32.dll")
         elif sys.platform == "cygwin":
             dll_path = "/bin/cygcrypto-1.0.0.dll"
+        elif os.path.isfile("../lib/libcrypto.so"): # ZeroBundle OSX
+            dll_path = "../lib/libcrypto.so"
         else:
             dll_path = "/usr/local/ssl/lib/libcrypto.so"
         ssl = _OpenSSL(dll_path)
@@ -442,6 +446,7 @@ def openLibrary():
     except Exception, err:
         ssl = _OpenSSL(ctypes.util.find_library('ssl') or ctypes.util.find_library('crypto') or ctypes.util.find_library('libcrypto') or 'libeay32')
     OpenSSL = ssl
+    logging.debug("pyelliptic loaded: %s", ssl._lib)
 
 
 def closeLibrary():

@@ -102,11 +102,13 @@ class TestContent:
         )
 
     def testSignOptionalFiles(self, site):
+        for hash in list(site.content_manager.hashfield):
+            site.content_manager.hashfield.remove(hash)
+
         assert len(site.content_manager.hashfield) == 0
 
         site.content_manager.contents["content.json"]["optional"] = "((data/img/zero.*))"
         content_optional = site.content_manager.sign(privatekey="5KUh3PvNm5HUWoCfSUfcYvfQ2g3PrRNJWr6Q9eqdBGu23mtMntv", filewrite=False)
-
 
         del site.content_manager.contents["content.json"]["optional"]
         content_nooptional = site.content_manager.sign(privatekey="5KUh3PvNm5HUWoCfSUfcYvfQ2g3PrRNJWr6Q9eqdBGu23mtMntv", filewrite=False)
@@ -136,7 +138,7 @@ class TestContent:
     def testVerify(self, site):
         privatekey = "5KUh3PvNm5HUWoCfSUfcYvfQ2g3PrRNJWr6Q9eqdBGu23mtMntv"
         inner_path = "data/test_include/content.json"
-        data_dict = site.content_manager.contents[inner_path]
+        data_dict = site.storage.loadJson(inner_path)
         data = StringIO(json.dumps(data_dict))
 
         # Re-sign

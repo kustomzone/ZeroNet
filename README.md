@@ -1,16 +1,18 @@
 # ZeroNet [![Build Status](https://travis-ci.org/HelloZeroNet/ZeroNet.svg?branch=master)](https://travis-ci.org/HelloZeroNet/ZeroNet) [![Documentation](https://img.shields.io/badge/docs-faq-brightgreen.svg)](https://zeronet.readthedocs.org/en/latest/faq/) [![Help](https://img.shields.io/badge/keep_this_project_alive-donate-yellow.svg)](https://zeronet.readthedocs.org/en/latest/help_zeronet/donate/)
 
+[简体中文](./README-zh-cn.md)
+
 Decentralized websites using Bitcoin crypto and the BitTorrent network - https://zeronet.io
 
 
 ## Why?
 
 * We believe in open, free, and uncensored network and communication.
-* No single point of failure: Site remains online so long as at least 1 peer
+* No single point of failure: Site remains online so long as at least 1 peer is
   serving it.
 * No hosting costs: Sites are served by visitors.
 * Impossible to shut down: It's nowhere because it's everywhere.
-* Fast and works offline: You can access the site even if your internet is
+* Fast and works offline: You can access the site even if Internet is
   unavailable.
 
 
@@ -20,11 +22,11 @@ Decentralized websites using Bitcoin crypto and the BitTorrent network - https:/
  * Easy to setup: unpack & run
  * Clone websites in one click
  * Password-less [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki)
-   based authorization: Your account is protected by same cryptography as your Bitcoin wallet
+   based authorization: Your account is protected by the same cryptography as your Bitcoin wallet
  * Built-in SQL server with P2P data synchronization: Allows easier site development and faster page load times
- * Anonymity: Full Tor network support with .onion hidden services instead of ipv4 addresses
+ * Anonymity: Full Tor network support with .onion hidden services instead of IPv4 addresses
  * TLS encrypted connections
- * Automatic, uPnP port opening
+ * Automatic uPnP port opening
  * Plugin for multiuser (openproxy) support
  * Works with any browser/OS
 
@@ -36,12 +38,12 @@ Decentralized websites using Bitcoin crypto and the BitTorrent network - https:/
   `http://127.0.0.1:43110/1HeLLo4uzjaLetFx6NH3PMwFP3qbRbTf3D`).
 * When you visit a new zeronet site, it tries to find peers using the BitTorrent
   network so it can download the site files (html, css, js...) from them.
-* Each visited site becomes also served by you.
-* Every site contains a `content.json` which holds all other files in a sha512 hash
-  and a signature generated using site's private key.
+* Each visited site is also served by you.
+* Every site contains a `content.json` file which holds all other files in a sha512 hash
+  and a signature generated using the site's private key.
 * If the site owner (who has the private key for the site address) modifies the
   site, then he/she signs the new `content.json` and publishes it to the peers.
-  After the peers have verified the `content.json` integrity (using the
+  Afterwards, the peers verify the `content.json` integrity (using the
   signature), they download the modified files and publish the new content to
   other peers.
 
@@ -59,29 +61,31 @@ Decentralized websites using Bitcoin crypto and the BitTorrent network - https:/
 #### [More screenshots in ZeroNet docs »](https://zeronet.readthedocs.org/en/latest/using_zeronet/sample_sites/)
 
 
-## How to join?
+## How to join
 
-### Windows
+* Download ZeroBundle package:
+  * [Microsoft Windows](https://github.com/HelloZeroNet/ZeroBundle/raw/master/dist/ZeroBundle-win.zip)
+  * [Apple OS X](https://github.com/HelloZeroNet/ZeroBundle/raw/master/dist/ZeroBundle-mac-osx.zip)
+  * [Linux 64bit](https://github.com/HelloZeroNet/ZeroBundle/raw/master/dist/ZeroBundle-linux64.tar.gz)
+  * [Linux 32bit](https://github.com/HelloZeroNet/ZeroBundle/raw/master/dist/ZeroBundle-linux32.tar.gz)
+* Unpack anywhere
+* Run `ZeroNet.cmd` (win), `ZeroNet(.app)` (osx), `ZeroNet.sh` (linux)
+* On OSX you may need to make the application executable via `chmod +x ZeroNet.app`
 
-* [Download ZeroBundle package](https://github.com/HelloZeroNet/ZeroBundle/releases/download/0.1.1/ZeroBundle-v0.1.1.zip) that includes Python 2.7.9 and all required libraries
-* Unpack to any directory
-* Run `zeronet.cmd`
+If you get "classic environment no longer supported" error on OS X: Open a Terminal window and drop ZeroNet.app on it
 
 It downloads the latest version of ZeroNet then starts it automatically.
 
+### Linux terminal
 
-#### Alternative method for Windows by installing Python
+* `wget https://github.com/HelloZeroNet/ZeroBundle/raw/master/dist/ZeroBundle-linux64.tar.gz`
+* `tar xvpfz ZeroBundle-linux64.tar.gz`
+* `cd ZeroBundle`
+* Start with `./ZeroNet.sh`
 
-* [Install Python 2.7](https://www.python.org/ftp/python/2.7.9/python-2.7.9.msi)
-* [Install Python Greenlet](https://zeronet.io/files/windows/greenlet-0.4.5.win32-py2.7.exe)
-* [Install Python Gevent](https://zeronet.io/files/windows/gevent-1.0.1.win32-py2.7.exe)
-* [Install Python MsgPack](https://zeronet.io/files/windows/msgpack-python-0.4.2.win32-py2.7.exe)
-* [Download and extract ZeroNet](https://codeload.github.com/HelloZeroNet/ZeroNet/zip/master) to any directory
-* Run `start.py`
+It downloads the latest version of ZeroNet then starts it automatically.
 
-### Linux
-
-#### Debian
+#### Manual install for Debian Linux
 
 * `sudo apt-get update`
 * `sudo apt-get install msgpack-python python-gevent`
@@ -89,22 +93,10 @@ It downloads the latest version of ZeroNet then starts it automatically.
 * `tar xvpfz master.tar.gz`
 * `cd ZeroNet-master`
 * Start with `python zeronet.py`
-* Open http://127.0.0.1:43110/ in your browser and enjoy! :)
+* Open http://127.0.0.1:43110/ in your browser
 
-#### Other Linux or without root access
-* Check your python version using `python --version` if the returned version is not `Python 2.7.X` then try `python2` or `python2.7` command and use it from now
-* `wget https://bootstrap.pypa.io/get-pip.py`
-* `python get-pip.py --user gevent msgpack-python`
-* Start with `python zeronet.py`
 
-### Mac
-
- * Install [Homebrew](http://brew.sh/)
- * `brew install python`
- * `pip install gevent msgpack-python`
- * [Download](https://github.com/HelloZeroNet/ZeroNet/archive/master.zip), Unpack, run `python zeronet.py`
-
-### Vagrant
+### [Vagrant](https://www.vagrantup.com/)
 
 * `vagrant up`
 * Access VM with `vagrant ssh`
@@ -112,13 +104,26 @@ It downloads the latest version of ZeroNet then starts it automatically.
 * Run `python zeronet.py --ui_ip 0.0.0.0`
 * Open http://127.0.0.1:43110/ in your browser
 
-### Docker
-* `docker run -p 15441:15441 -p 43110:43110 nofish/zeronet`
+### [Docker](https://www.docker.com/)
+* `docker run -d -v <local_data_folder>:/root/data -p 15441:15441 -p 127.0.0.1:43110:43110 nofish/zeronet`
+* This Docker image includes the Tor proxy, which is disabled by default. Beware that some
+hosting providers may not allow you running Tor in their servers. If you want to enable it,
+set `ENABLE_TOR` environment variable to `true` (Default: `false`). E.g.:
+
+ `docker run -d -e "ENABLE_TOR=true" -v <local_data_folder>:/root/data -p 15441:15441 -p 127.0.0.1:43110:43110 nofish/zeronet`
+* Open http://127.0.0.1:43110/ in your browser
+
+### [Virtualenv](https://virtualenv.readthedocs.org/en/latest/)
+
+* `virtualenv env`
+* `source env/bin/activate`
+* `pip install msgpack-python gevent`
+* `python zeronet.py`
 * Open http://127.0.0.1:43110/ in your browser
 
 ## Current limitations
 
-* No torrent-like, file splitting for big file support
+* No torrent-like file splitting for big file support
 * ~~No more anonymous than Bittorrent~~ (built-in full Tor support added)
 * File transactions are not compressed ~~or encrypted yet~~ (TLS encryption added)
 * No private sites
@@ -169,10 +174,11 @@ Site:13DNDk..bhC2 Successfuly published to 3 peers
 * That's it! You've successfully signed and published your modifications.
 
 
-## If you want to help keep this project alive
+## Help keep this project alive
 
 - Bitcoin: 1QDhxQ6PraUZa21ET5fYUCPgdrwBomnFgX
 - Paypal: https://zeronet.readthedocs.org/en/latest/help_zeronet/donate/
+- Gratipay: https://gratipay.com/zeronet/
 
 ### Sponsors
 

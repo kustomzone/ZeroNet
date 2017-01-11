@@ -196,15 +196,18 @@ def openLibrary():
     global ssl
     try:
         if sys.platform.startswith("win"):
-            dll_path = "src/lib/opensslVerify/libeay32.dll"
+            dll_path = os.path.dirname(__file__) + "/" + "libeay32.dll"
         elif sys.platform == "cygwin":
             dll_path = "/bin/cygcrypto-1.0.0.dll"
+        elif os.path.isfile("../lib/libcrypto.so"): # ZeroBundle OSX
+            dll_path = "../lib/libcrypto.so"
         else:
             dll_path = "/usr/local/ssl/lib/libcrypto.so"
         ssl = _OpenSSL(dll_path)
         assert ssl
     except Exception, err:
         ssl = _OpenSSL(ctypes.util.find_library('ssl') or ctypes.util.find_library('crypto') or ctypes.util.find_library('libcrypto') or 'libeay32')
+    logging.debug("opensslVerify loaded: %s", ssl._lib)
 
 openLibrary()
 openssl_version = "%.9X" % ssl._lib.SSLeay()
@@ -453,7 +456,7 @@ if __name__ == "__main__":
     sign = btctools.ecdsa_sign("hello", priv)  # HGbib2kv9gm9IJjDt1FXbXFczZi35u0rZR3iPUIt5GglDDCeIQ7v8eYXVNIaLoJRI4URGZrhwmsYQ9aVtRTnTfQ=
 
     s = time.time()
-    for i in range(100):
+    for i in range(1000):
         pubkey = getMessagePubkey("hello", sign)
         verified = btctools.pubkey_to_address(pubkey) == address
     print "100x Verified", verified, time.time() - s

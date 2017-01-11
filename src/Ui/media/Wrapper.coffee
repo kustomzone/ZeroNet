@@ -23,7 +23,7 @@ class Wrapper
 		@wrapperWsInited = false # Wrapper notified on websocket open
 		@site_error = null # Latest failed file download
 		@address = null
-		@opener = null
+		@opener_tested = false
 
 		window.onload = @onLoad # On iframe loaded
 		window.onhashchange = (e) => # On hash change
@@ -33,7 +33,7 @@ class Wrapper
 				$("#inner-iframe").attr("src", src)
 
 		window.onpopstate = (e) =>
-			@sendInner {"cmd": "wrapperPopstate", "result": {"href": document.location.href, "state": e.state}}
+			@sendInner {"cmd": "wrapperPopState", "params": {"href": document.location.href, "state": e.state}}
 
 		$("#inner-iframe").focus()
 
@@ -50,16 +50,20 @@ class Wrapper
 		else if cmd == "notification" # Display notification
 			type = message.params[0]
 			id = "notification-#{message.id}"
-			if "-" in message.params[0]  # - in first param: message id definied
+			if "-" in message.params[0]  # - in first param: message id defined
 				[id, type] = message.params[0].split("-")
 			@notifications.add(id, type, message.params[1], message.params[2])
 		else if cmd == "prompt" # Prompt input
 			@displayPrompt message.params[0], message.params[1], message.params[2], (res) =>
 				@ws.response message.id, res
+		else if cmd == "confirm" # Confirm action
+			@displayConfirm message.params[0], message.params[1], (res) =>
+				@ws.response message.id, res
 		else if cmd == "setSiteInfo"
 			@sendInner message # Pass to inner frame
 			if message.params.address == @address # Current page
 				@setSiteInfo message.params
+			@updateProgress message.params
 		else if cmd == "error"
 			@notifications.add("notification-#{message.id}", "error", message.params, 0)
 		else if cmd == "updating" # Close connection
@@ -70,20 +74,25 @@ class Wrapper
 
 	# Incoming message from inner frame
 	onMessageInner: (e) =>
-		if not window.postmessage_nonce_security and @opener == null  # Test opener
-			if window.opener
+		# No nonce security enabled, test if window opener present
+		if not window.postmessage_nonce_security and @opener_tested == false
+			if window.opener and window.opener != window
 				@log "Opener present", window.opener
 				@displayOpenerDialog()
 				return false
 			else
-				@opener = false
+				@opener_tested = true
 
 		message = e.data
+		# Invalid message (probably not for us)
+		if not message.cmd
+			return false
+
+		# Test nonce security to avoid third-party messages
 		if window.postmessage_nonce_security and message.wrapper_nonce != window.wrapper_nonce
 			@log "Message nonce error:", message.wrapper_nonce, '!=', window.wrapper_nonce
-			@actionNotification({"params": ["error", "Message wrapper_nonce error, please report!"]})
-			window.removeEventListener("message", @onMessageInner)
 			return
+
 		cmd = message.cmd
 		if cmd == "innerReady"
 			@inner_ready = true
@@ -102,6 +111,8 @@ class Wrapper
 			@actionPrompt(message)
 		else if cmd == "wrapperSetViewport" # Set the viewport
 			@actionSetViewport(message)
+		else if cmd == "wrapperSetTitle"
+			$("head title").text(message.params)
 		else if cmd == "wrapperReload" # Reload current page
 			@actionReload(message)
 		else if cmd == "wrapperGetLocalStorage"
@@ -116,6 +127,12 @@ class Wrapper
 			window.history.replaceState(message.params[0], message.params[1], query)
 		else if cmd == "wrapperGetState"
 			@sendInner {"cmd": "response", "to": message.id, "result": window.history.state}
+		else if cmd == "wrapperOpenWindow"
+			@actionOpenWindow(message.params)
+		else if cmd == "wrapperPermissionAdd"
+			@actionPermissionAdd(message)
+		else if cmd == "wrapperRequestFullscreen"
+			@actionRequestFullscreen()
 		else # Send to websocket
 			if message.id < 1000000
 				@ws.send(message) # Pass message to websocket
@@ -126,7 +143,7 @@ class Wrapper
 		if query == null
 			query = window.location.search
 		back = window.location.pathname
-		if back.slice(-1) != "/"
+		if back.match /^\/[^\/]+$/ # Add / after site address if called without it
 			back += "/"
 		if query.replace("?", "")
 			back += "?"+query.replace("?", "")
@@ -143,6 +160,38 @@ class Wrapper
 
 	# - Actions -
 
+	actionOpenWindow: (params) ->
+		if typeof(params) == "string"
+			w = window.open()
+			w.opener = null
+			w.location = params
+		else
+			w = window.open(null, params[1], params[2])
+			w.opener = null
+			w.location = params[0]
+
+	actionRequestFullscreen: ->
+		if "Fullscreen" in @site_info.settings.permissions
+			elem = document.getElementById("inner-iframe")
+			request_fullscreen = elem.requestFullScreen || elem.webkitRequestFullscreen || elem.mozRequestFullScreen || elem.msRequestFullScreen
+			request_fullscreen.call(elem)
+			setTimeout ( =>
+				if window.innerHeight != screen.height  # Fullscreen failed, probably only allowed on click
+					@displayConfirm "This site requests permission:" + " <b>Fullscreen</b>", "Grant", =>
+						request_fullscreen.call(elem)
+			), 100
+		else
+			@displayConfirm "This site requests permission:" + " <b>Fullscreen</b>", "Grant", =>
+				@site_info.settings.permissions.push("Fullscreen")
+				@actionRequestFullscreen()
+				@ws.cmd "permissionAdd", "Fullscreen"
+
+	actionPermissionAdd: (message) ->
+		permission = message.params
+		@displayConfirm "This site requests permission:" + " <b>#{@toHtmlSafe(permission)}</b>", "Grant", =>
+			@ws.cmd "permissionAdd", permission, =>
+				@sendInner {"cmd": "response", "to": message.id, "result": "Granted"}
+
 	actionNotification: (message) ->
 		message.params = @toHtmlSafe(message.params) # Escape html
 		body =  $("<span class='message'>"+message.params[1]+"</span>")
@@ -153,7 +202,9 @@ class Wrapper
 	displayConfirm: (message, caption, cb) ->
 		body = $("<span class='message'>"+message+"</span>")
 		button = $("<a href='##{caption}' class='button button-#{caption}'>#{caption}</a>") # Add confirm button
-		button.on "click", cb
+		button.on "click", =>
+			cb(true)
+			return false
 		body.append(button)
 		@notifications.add("notification-#{caption}", "ask", body)
 
@@ -207,6 +258,8 @@ class Wrapper
 		else
 			$('<meta name="viewport" id="viewport">').attr("content", @toHtmlSafe message.params).appendTo("head")
 
+	actionReload: (message) ->
+		@reload()
 
 	reload: (url_post="") ->
 		if url_post
@@ -233,6 +286,7 @@ class Wrapper
 
 	actionSetLocalStorage: (message) ->
 		back = localStorage.setItem "site.#{@site_info.address}.#{@site_info.auth_address}", JSON.stringify(message.params)
+		@sendInner {"cmd": "response", "to": message.id, "result": back}
 
 
 	# EOF actions
@@ -262,6 +316,8 @@ class Wrapper
 			@sendInner {"cmd": "wrapperClosedWebsocket"} # Send to inner frame
 			if e and e.code == 1000 and e.wasClean == false # Server error please reload page
 				@ws_error = @notifications.add("connection", "error", "UiServer Websocket error, please reload the page.")
+			else if e and e.code == 1001 and e.wasClean == true  # Navigating to other page
+				return
 			else if not @ws_error
 				@ws_error = @notifications.add("connection", "error", "Connection with <b>UiServer Websocket</b> was lost. Reconnecting...")
 		), 1000
@@ -354,13 +410,14 @@ class Wrapper
 		if @loading.screen_visible and @inner_loaded and site_info.settings.size < site_info.size_limit*1024*1024 and site_info.settings.size > 0 # Loading screen still visible, but inner loaded
 			@loading.hideScreen()
 
-		if site_info.tasks > 0 and site_info.started_task_num > 0
-			@loading.setProgress 1-(site_info.tasks / site_info.started_task_num)
-		else
-			@loading.hideProgress()
-
 		@site_info = site_info
 		@event_site_info.resolve()
+
+	updateProgress: (site_info) ->
+		if site_info.tasks > 0 and site_info.started_task_num > 0
+			@loading.setProgress 1-(Math.max(site_info.tasks, site_info.bad_files) / site_info.started_task_num)
+		else
+			@loading.hideProgress()
 
 
 	toHtmlSafe: (values) ->
@@ -397,7 +454,7 @@ class Wrapper
 	log: (args...) ->
 		console.log "[Wrapper]", args...
 
-origin = window.server_url or window.location.origin
+origin = window.server_url or window.location.href.replace(/(\:\/\/.*?)\/.*/, "$1")
 
 if origin.indexOf("https:") == 0
 	proto = { ws: 'wss', http: 'https' }

@@ -1,14 +1,15 @@
 import argparse
 import sys
 import os
+import locale
 import ConfigParser
 
 
 class Config(object):
 
     def __init__(self, argv):
-        self.version = "0.3.6"
-        self.rev = 912
+        self.version = "0.5.1"
+        self.rev = 1812
         self.argv = argv
         self.action = None
         self.config_file = "zeronet.conf"
@@ -36,9 +37,9 @@ class Config(object):
             "udp://tracker.coppersurfer.tk:6969",
             "udp://tracker.leechers-paradise.org:6969",
             "udp://9.rarbg.com:2710",
-            "http://tracker.aletorrenty.pl:2710/announce",
+            "http://tracker.tordb.ml:6881/announce",
             "http://explodie.org:6969/announce",
-            "http://torrent.gresille.org/announce"
+            "http://tracker1.wasabii.com.tw:6969/announce"
         ]
         # Platform specific
         if sys.platform.startswith("win"):
@@ -46,7 +47,28 @@ class Config(object):
         else:
             coffeescript = None
 
+        try:
+            language, enc = locale.getdefaultlocale()
+            language = language.split("_")[0]
+        except Exception:
+            language = "en"
+
         use_openssl = True
+
+        if repr(1483108852.565) != "1483108852.565":
+            fix_float_decimals = True
+        else:
+            fix_float_decimals = False
+
+        if __file__.replace("\\", "/").endswith("core/src/Config.py"):
+            # Probably running as exe form, put var files to outside of Include dir
+            config_file = "../zeronet.conf"
+            data_dir = "../data"
+            log_dir = "../log"
+        else:
+            config_file = "zeronet.conf"
+            data_dir = "data"
+            log_dir = "log"
 
         # Main
         action = self.subparsers.add_parser("main", help='Start UiServer and FileServer (default)')
@@ -58,6 +80,10 @@ class Config(object):
         action = self.subparsers.add_parser("siteNeedFile", help='Get a file from site')
         action.add_argument('address', help='Site address')
         action.add_argument('inner_path', help='File inner path')
+
+        # SiteDownload
+        action = self.subparsers.add_parser("siteDownload", help='Download a new site')
+        action.add_argument('address', help='Site address')
 
         # SiteSign
         action = self.subparsers.add_parser("siteSign", help='Update and sign content.json: address [privatekey]')
@@ -116,15 +142,18 @@ class Config(object):
         action.add_argument('privatekey', help='Private key')
 
         # Config parameters
+        self.parser.add_argument('--verbose', help='More detailed logging', action='store_true')
         self.parser.add_argument('--debug', help='Debug mode', action='store_true')
         self.parser.add_argument('--debug_socket', help='Debug socket connections', action='store_true')
+        self.parser.add_argument('--debug_gevent', help='Debug gevent functions', action='store_true')
 
         self.parser.add_argument('--batch', help="Batch mode (No interactive input for commands)", action='store_true')
 
-        self.parser.add_argument('--config_file', help='Path of config file', default="zeronet.conf", metavar="path")
-        self.parser.add_argument('--data_dir', help='Path of data directory', default="data", metavar="path")
-        self.parser.add_argument('--log_dir', help='Path of logging directory', default="log", metavar="path")
+        self.parser.add_argument('--config_file', help='Path of config file', default=config_file, metavar="path")
+        self.parser.add_argument('--data_dir', help='Path of data directory', default=data_dir, metavar="path")
+        self.parser.add_argument('--log_dir', help='Path of logging directory', default=log_dir, metavar="path")
 
+        self.parser.add_argument('--language', help='Web interface language', default=language, metavar='language')
         self.parser.add_argument('--ui_ip', help='Web interface bind address', default="127.0.0.1", metavar='ip')
         self.parser.add_argument('--ui_port', help='Web interface bind port', default=43110, type=int, metavar='port')
         self.parser.add_argument('--ui_restrict', help='Restrict web access', default=False, metavar='ip', nargs='*')
@@ -132,7 +161,10 @@ class Config(object):
                                  nargs='?', const="default_browser", metavar='browser_name')
         self.parser.add_argument('--homepage', help='Web interface Homepage', default='1HeLLo4uzjaLetFx6NH3PMwFP3qbRbTf3D',
                                  metavar='address')
-        self.parser.add_argument('--size_limit', help='Default site size limit in MB', default=10, metavar='size')
+        self.parser.add_argument('--updatesite', help='Source code update site', default='1UPDatEDxnvHDo7TXvq6AEBARfNkyfxsp',
+                                 metavar='address')
+        self.parser.add_argument('--size_limit', help='Default site size limit in MB', default=10, type=int, metavar='size')
+        self.parser.add_argument('--connected_limit', help='Max connected peer per site', default=6, type=int, metavar='connected_limit')
 
         self.parser.add_argument('--fileserver_ip', help='FileServer bind address', default="*", metavar='ip')
         self.parser.add_argument('--fileserver_port', help='FileServer bind port', default=15441, type=int, metavar='port')
@@ -143,16 +175,21 @@ class Config(object):
         self.parser.add_argument('--trackers_file', help='Load torrent trackers dynamically from a file', default=False, metavar='path')
         self.parser.add_argument('--use_openssl', help='Use OpenSSL liblary for speedup',
                                  type='bool', choices=[True, False], default=use_openssl)
+        self.parser.add_argument('--disable_db', help='Disable database updating', action='store_true')
         self.parser.add_argument('--disable_encryption', help='Disable connection encryption', action='store_true')
         self.parser.add_argument('--disable_sslcompression', help='Disable SSL compression to save memory',
                                  type='bool', choices=[True, False], default=True)
         self.parser.add_argument('--keep_ssl_cert', help='Disable new SSL cert generation on startup', action='store_true')
+        self.parser.add_argument('--max_files_opened', help='Change maximum opened files allowed by OS to this value on startup',
+                                 default=2048, type=int, metavar='limit')
         self.parser.add_argument('--use_tempfiles', help='Use temporary files when downloading (experimental)',
                                  type='bool', choices=[True, False], default=False)
         self.parser.add_argument('--stream_downloads', help='Stream download directly to files (experimental)',
                                  type='bool', choices=[True, False], default=False)
         self.parser.add_argument("--msgpack_purepython", help='Use less memory, but a bit more CPU power',
                                  type='bool', choices=[True, False], default=True)
+        self.parser.add_argument("--fix_float_decimals", help='Fix content.json modification date float precision on verification',
+                                 type='bool', choices=[True, False], default=fix_float_decimals)
 
         self.parser.add_argument('--coffeescript_compiler', help='Coffeescript compiler for developing', default=coffeescript,
                                  metavar='executable_path')
@@ -160,6 +197,7 @@ class Config(object):
         self.parser.add_argument('--tor', help='enable: Use only for Tor peers, always: Use Tor for every connection', choices=["disable", "enable", "always"], default='enable')
         self.parser.add_argument('--tor_controller', help='Tor controller address', metavar='ip:port', default='127.0.0.1:9051')
         self.parser.add_argument('--tor_proxy', help='Tor proxy address', metavar='ip:port', default='127.0.0.1:9050')
+        self.parser.add_argument('--tor_password', help='Tor controller password', metavar='password')
 
         self.parser.add_argument('--version', action='version', version='ZeroNet %s r%s' % (self.version, self.rev))
 
@@ -293,5 +331,36 @@ class Config(object):
 
         ConfigPlugin(self)
 
+    def saveValue(self, key, value):
+        if not os.path.isfile(self.config_file):
+            content = ""
+        else:
+            content = open(self.config_file).read()
+        lines = content.splitlines()
+
+        global_line_i = None
+        key_line_i = None
+        i = 0
+        for line in lines:
+            if line.strip() == "[global]":
+                global_line_i = i
+            if line.startswith(key + " = "):
+                key_line_i = i
+            i += 1
+
+        if value is None:  # Delete line
+            if key_line_i:
+                del lines[key_line_i]
+        else:  # Add / update
+            new_line = "%s = %s" % (key, str(value).replace("\n", "").replace("\r", ""))
+            if key_line_i:  # Already in the config, change the line
+                lines[key_line_i] = new_line
+            elif global_line_i is None:  # No global section yet, append to end of file
+                lines.append("[global]")
+                lines.append(new_line)
+            else:  # Has global section, append the line after it
+                lines.insert(global_line_i + 1, new_line)
+
+        open(self.config_file, "w").write("\n".join(lines))
 
 config = Config(sys.argv)

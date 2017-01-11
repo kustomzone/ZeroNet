@@ -1,4 +1,4 @@
-FROM ubuntu:14.04
+FROM ubuntu:16.04
 
 MAINTAINER Felix Imobersteg <felix@whatwedo.ch>
 
@@ -6,22 +6,26 @@ MAINTAINER Felix Imobersteg <felix@whatwedo.ch>
 ENV DEBIAN_FRONTEND noninteractive
 ENV HOME /root
 
-#Update package lists
-RUN apt-get update -y
-
-#Install ZeroNet deps
-RUN apt-get install msgpack-python python-gevent python-pip python-dev -y
-RUN pip install msgpack-python --upgrade
+#Install ZeroNet
+RUN \
+    apt-get update -y; \
+    apt-get -y install msgpack-python python-gevent python-pip python-dev tor; \
+    pip install msgpack-python --upgrade; \
+    apt-get clean -y; \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*; \
+    echo "ControlPort 9051" >> /etc/tor/torrc; \
+    echo "CookieAuthentication 1" >> /etc/tor/torrc
+    
 
 #Add Zeronet source
 ADD . /root
+VOLUME /root/data
 
-#Slimming down Docker containers
-RUN apt-get clean -y
-RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+#Control if Tor proxy is started
+ENV ENABLE_TOR false
 
 #Set upstart command
-CMD cd /root && python zeronet.py --ui_ip 0.0.0.0
+CMD cd /root && (! ${ENABLE_TOR} || /etc/init.d/tor start) && python zeronet.py --ui_ip 0.0.0.0
 
 #Expose ports
 EXPOSE 43110

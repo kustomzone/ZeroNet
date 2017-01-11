@@ -1,6 +1,5 @@
 import socket
 import time
-import hashlib
 
 import gevent
 import msgpack
@@ -9,15 +8,14 @@ from Config import config
 from Debug import Debug
 from util import StreamingMsgpack
 from Crypt import CryptConnection
-from Site import SiteManager
 
 
 class Connection(object):
     __slots__ = (
         "sock", "sock_wrapped", "ip", "port", "cert_pin", "site_lock", "id", "protocol", "type", "server", "unpacker", "req_id",
         "handshake", "crypt", "connected", "event_connected", "closed", "start_time", "last_recv_time",
-        "last_message_time", "last_send_time", "last_sent_time", "incomplete_buff_recv", "bytes_recv", "bytes_sent",
-        "last_ping_delay", "last_req_time", "last_cmd", "name", "updateName", "waiting_requests", "waiting_streams"
+        "last_message_time", "last_send_time", "last_sent_time", "incomplete_buff_recv", "bytes_recv", "bytes_sent", "cpu_time",
+        "last_ping_delay", "last_req_time", "last_cmd", "bad_actions", "sites", "name", "updateName", "waiting_requests", "waiting_streams"
     )
 
     def __init__(self, server, ip, port, sock=None, site_lock=None):
@@ -56,6 +54,9 @@ class Connection(object):
         self.last_ping_delay = None
         self.last_req_time = 0
         self.last_cmd = None
+        self.bad_actions = 0
+        self.sites = 0
+        self.cpu_time = 0.0
 
         self.name = None
         self.updateName()
@@ -74,6 +75,17 @@ class Connection(object):
 
     def log(self, text):
         self.server.log.debug("%s > %s" % (self.name, text))
+
+    def badAction(self, weight=1):
+        self.bad_actions += weight
+        if self.bad_actions > 40:
+            self.close()
+        elif self.bad_actions > 20:
+            time.sleep(5)
+
+
+    def goodAction(self):
+        self.bad_actions = 0
 
     # Open connection to peer and wait for handshake
     def connect(self):
@@ -123,19 +135,21 @@ class Connection(object):
         self.protocol = "v2"
         self.updateName()
         self.connected = True
+        buff_len = 0
 
         self.unpacker = msgpack.Unpacker()
         try:
-            while True:
+            while not self.closed:
                 buff = self.sock.recv(16 * 1024)
                 if not buff:
                     break  # Connection closed
+                buff_len = len(buff)
 
                 # Statistics
                 self.last_recv_time = time.time()
                 self.incomplete_buff_recv += 1
-                self.bytes_recv += len(buff)
-                self.server.bytes_recv += len(buff)
+                self.bytes_recv += buff_len
+                self.server.bytes_recv += buff_len
 
                 if not self.unpacker:
                     self.unpacker = msgpack.Unpacker()
@@ -172,7 +186,7 @@ class Connection(object):
             onion_sites = {v: k for k, v in self.server.tor_manager.site_onions.items()}  # Inverse, Onion: Site address
             self.site_lock = onion_sites.get(target_onion)
             if not self.site_lock:
-                self.server.log.error("Unknown target onion address: %s" % target_onion)
+                self.server.log.warning("Unknown target onion address: %s" % target_onion)
                 self.site_lock = "unknown"
 
         handshake = {
@@ -195,7 +209,7 @@ class Connection(object):
 
     def setHandshake(self, handshake):
         self.handshake = handshake
-        if handshake.get("port_opened", None) is False and not "onion" in handshake:  # Not connectable
+        if handshake.get("port_opened", None) is False and "onion" not in handshake:  # Not connectable
             self.port = 0
         else:
             self.port = handshake["fileserver_port"]  # Set peer fileserver port
@@ -255,7 +269,7 @@ class Connection(object):
                 self.handleHandshake(message)
             else:
                 self.server.handleRequest(self, message)
-        else:  # Old style response, no req_id definied
+        else:  # Old style response, no req_id defined
             if config.debug_socket:
                 self.log("Unknown message: %s, waiting: %s" % (message, self.waiting_requests.keys()))
             if self.waiting_requests:
@@ -282,6 +296,7 @@ class Connection(object):
             except Exception, err:
                 self.log("Crypt connection error: %s, adding peerid %s as broken ssl." % (err, message["params"]["peer_id"]))
                 self.server.broken_ssl_peer_ids[message["params"]["peer_id"]] = True
+                self.close()
 
         if not self.sock_wrapped and self.cert_pin:
             self.log("Crypt connection error: Socket not encrypted, but certificate pin present")
@@ -289,8 +304,6 @@ class Connection(object):
 
     # Stream socket directly to a file
     def handleStream(self, message):
-        if config.debug_socket:
-            self.log("Starting stream %s: %s bytes" % (message["to"], message["stream_bytes"]))
 
         read_bytes = message["stream_bytes"]  # Bytes left we have to read from socket
         try:
@@ -301,6 +314,9 @@ class Connection(object):
         if buff:
             read_bytes -= len(buff)
             file.write(buff)
+
+        if config.debug_socket:
+            self.log("Starting stream %s: %s bytes (%s from unpacker)" % (message["to"], message["stream_bytes"], len(buff)))
 
         try:
             while 1:
@@ -425,6 +441,7 @@ class Connection(object):
             request.set(False)
         self.waiting_requests = {}
         self.waiting_streams = {}
+        self.sites = 0
         self.server.removeConnection(self)  # Remove connection from server registry
         try:
             if self.sock:

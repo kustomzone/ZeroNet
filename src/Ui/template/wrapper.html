@@ -34,7 +34,7 @@ if (window.opener && window.stop) window.stop()
 <div class='fixbutton'>
  <div class='fixbutton-text'>0</div>
  <div class='fixbutton-burger'>&#x2261;</div>
- <a class='fixbutton-bg' href="{homepage}"></a>
+ <a class='fixbutton-bg' href="{homepage}/"></a>
 </div>
 
 
@@ -69,8 +69,11 @@ file_inner_path = "{file_inner_path}"
 permissions = {permissions}
 show_loadingscreen = {show_loadingscreen}
 server_url = '{server_url}'
+
+if (typeof WebSocket === "undefined")
+	document.body.innerHTML += "<div class='unsupported'>Your browser is not supported please use <a href='http://outdatedbrowser.com'>Chrome or Firefox</a>.</div>";
 </script>
-<script type="text/javascript" src="/uimedia/all.js?rev={rev}"></script>
+<script type="text/javascript" src="/uimedia/all.js?rev={rev}&lang={lang}"></script>
 
 </body>
 </html>

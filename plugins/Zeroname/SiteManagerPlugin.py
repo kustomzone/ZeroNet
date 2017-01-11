@@ -1,6 +1,8 @@
 import logging
 import re
+import time
 
+from Config import config
 from Plugin import PluginManager
 
 allow_reload = False  # No reload supported
@@ -10,13 +12,14 @@ log = logging.getLogger("ZeronamePlugin")
 
 @PluginManager.registerTo("SiteManager")
 class SiteManagerPlugin(object):
-    zeroname_address = "1Name2NXVi1RDPDgf5617UoW7xA6YrhM9F"
     site_zeroname = None
+    db_domains = None
+    db_domains_modified = None
 
-    def load(self):
-        super(SiteManagerPlugin, self).load()
-        if not self.get(self.zeroname_address):
-            self.need(self.zeroname_address)  # Need ZeroName site
+    def load(self, *args, **kwargs):
+        super(SiteManagerPlugin, self).load(*args, **kwargs)
+        if not self.get(config.bit_resolver):
+            self.need(config.bit_resolver)  # Need ZeroName site
 
     # Checks if its a valid address
     def isAddress(self, address):
@@ -34,10 +37,19 @@ class SiteManagerPlugin(object):
     def resolveDomain(self, domain):
         domain = domain.lower()
         if not self.site_zeroname:
-            self.site_zeroname = self.need(self.zeroname_address)
-        self.site_zeroname.needFile("data/names.json", priority=10)
-        db = self.site_zeroname.storage.loadJson("data/names.json")
-        return db.get(domain)
+            self.site_zeroname = self.need(config.bit_resolver)
+
+        site_zeroname_modified = self.site_zeroname.content_manager.contents.get("content.json", {}).get("modified", 0)
+        if not self.db_domains or self.db_domains_modified != site_zeroname_modified:
+            self.site_zeroname.needFile("data/names.json", priority=10)
+            s = time.time()
+            self.db_domains = self.site_zeroname.storage.loadJson("data/names.json")
+            log.debug(
+                "Domain db with %s entries loaded in %.3fs (modification: %s -> %s)" %
+                (len(self.db_domains), time.time() - s, self.db_domains_modified, site_zeroname_modified)
+            )
+            self.db_domains_modified = site_zeroname_modified
+        return self.db_domains.get(domain)
 
     # Return or create site and start download site files
     # Return: Site or None if dns resolve failed

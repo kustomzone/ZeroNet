@@ -33,6 +33,7 @@ class ConnectionServer:
         self.ip_incoming = {}  # Incoming connections from ip in the last minute to avoid connection flood
         self.broken_ssl_peer_ids = {}  # Peerids of broken ssl connections
         self.ips = {}  # Connection by ip
+        self.has_internet = True  # Internet outage detection
 
         self.running = True
         self.thread_checker = gevent.spawn(self.checkConnections)
@@ -54,7 +55,7 @@ class ConnectionServer:
         if port:  # Listen server on a port
             self.pool = Pool(1000)  # do not accept more than 1000 connections
             self.stream_server = StreamServer(
-                (ip.replace("*", ""), port), self.handleIncomingConnection, spawn=self.pool, backlog=100
+                (ip.replace("*", "0.0.0.0"), port), self.handleIncomingConnection, spawn=self.pool, backlog=500
             )
             if request_handler:
                 self.handleRequest = request_handler
@@ -110,19 +111,19 @@ class ConnectionServer:
                         raise Exception("Connection event return error")
                 return connection
 
-        # Recover from connection pool
-        for connection in self.connections:
-            if connection.ip == ip:
-                if peer_id and connection.handshake.get("peer_id") != peer_id:  # Does not match
-                    continue
-                if ip.endswith(".onion") and self.tor_manager.start_onions and connection.site_lock != site.address:
-                    # For different site
-                    continue
-                if not connection.connected and create:
-                    succ = connection.event_connected.get()  # Wait for connection
-                    if not succ:
-                        raise Exception("Connection event return error")
-                return connection
+            # Recover from connection pool
+            for connection in self.connections:
+                if connection.ip == ip:
+                    if peer_id and connection.handshake.get("peer_id") != peer_id:  # Does not match
+                        continue
+                    if ip.endswith(".onion") and self.tor_manager.start_onions and connection.site_lock != site.address:
+                        # For different site
+                        continue
+                    if not connection.connected and create:
+                        succ = connection.event_connected.get()  # Wait for connection
+                        if not succ:
+                            raise Exception("Connection event return error")
+                    return connection
 
         # No connection found
         if create:  # Allow to create new connection if not found
@@ -164,12 +165,16 @@ class ConnectionServer:
             self.connections.remove(connection)
 
     def checkConnections(self):
+        run_i = 0
         while self.running:
+            run_i += 1
             time.sleep(60)  # Check every minute
             self.ip_incoming = {}  # Reset connected ips counter
             self.broken_ssl_peer_ids = {}  # Reset broken ssl peerids count
+            last_message_time = 0
             for connection in self.connections[:]:  # Make a copy
                 idle = time.time() - max(connection.last_recv_time, connection.start_time, connection.last_message_time)
+                last_message_time = max(last_message_time, connection.last_message_time)
 
                 if connection.unpacker and idle > 30:
                     # Delete the unpacker if not needed
@@ -186,12 +191,12 @@ class ConnectionServer:
                     connection.close()
 
                 elif idle > 20 * 60 and connection.last_send_time < time.time() - 10:
-                    # Idle more than 20 min and we not send request in last 10 sec
-                    if not connection.ping():  # send ping request
+                    # Idle more than 20 min and we have not sent request in last 10 sec
+                    if not connection.ping():
                         connection.close()
 
                 elif idle > 10 and connection.incomplete_buff_recv > 0:
-                    # Incompelte data with more than 10 sec idle
+                    # Incomplete data with more than 10 sec idle
                     connection.log("[Cleanup] Connection buff stalled")
                     connection.close()
 
@@ -205,3 +210,33 @@ class ConnectionServer:
                 elif idle > 60 and connection.protocol == "?":  # No connection after 1 min
                     connection.log("[Cleanup] Connect timeout: %s" % idle)
                     connection.close()
+
+                elif idle < 60 and connection.bad_actions > 40:
+                    connection.log("[Cleanup] Too many bad actions: %s" % connection.bad_actions)
+                    connection.close()
+
+                elif idle > 5*60 and connection.sites == 0:
+                    connection.log("[Cleanup] No site for connection")
+                    connection.close()
+
+                elif run_i % 30 == 0:
+                    # Reset bad action counter every 30 min
+                    connection.bad_actions = 0
+
+            # Internet outage detection
+            if time.time() - last_message_time > max(60, 60*10/max(1,float(len(self.connections))/50)):
+                # Offline: Last message more than 60-600sec depending on connection number
+                if self.has_internet:
+                    self.has_internet = False
+                    self.onInternetOffline()
+            else:
+                # Online
+                if not self.has_internet:
+                    self.has_internet = True
+                    self.onInternetOnline()
+
+    def onInternetOnline(self):
+        self.log.info("Internet online")
+
+    def onInternetOffline(self):
+        self.log.info("Internet offline")

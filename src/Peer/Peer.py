@@ -17,8 +17,8 @@ if config.use_tempfiles:
 # Communicate remote peers
 class Peer(object):
     __slots__ = (
-        "ip", "port", "site", "key", "connection", "connection_server", "time_found", "time_response", "time_hashfield", "time_added",
-        "time_my_hashfield_sent", "last_ping", "hashfield", "connection_error", "hash_failed", "download_bytes", "download_time"
+        "ip", "port", "site", "key", "connection", "connection_server", "time_found", "time_response", "time_hashfield", "time_added", "has_hashfield",
+        "time_my_hashfield_sent", "last_ping", "last_content_json_update", "hashfield", "connection_error", "hash_failed", "download_bytes", "download_time"
     )
 
     def __init__(self, ip, port, site=None, connection_server=None):
@@ -29,20 +29,31 @@ class Peer(object):
 
         self.connection = None
         self.connection_server = connection_server
-        self.hashfield = PeerHashfield()  # Got optional files hash_id
+        self.has_hashfield = False  # Lazy hashfield object not created yet
         self.time_hashfield = None  # Last time peer's hashfiled downloaded
         self.time_my_hashfield_sent = None  # Last time my hashfield sent to peer
         self.time_found = time.time()  # Time of last found in the torrent tracker
         self.time_response = None  # Time of last successful response from peer
         self.time_added = time.time()
         self.last_ping = None  # Last response time for ping
+        self.last_content_json_update = 0.0  # Modify date of last received content.json
 
         self.connection_error = 0  # Series of connection error
         self.hash_failed = 0  # Number of bad files from peer
         self.download_bytes = 0  # Bytes downloaded
         self.download_time = 0  # Time spent to download
 
+    def __getattr__(self, key):
+        if key == "hashfield":
+            self.has_hashfield = True
+            self.hashfield = PeerHashfield()
+            return self.hashfield
+        else:
+            return getattr(self, key)
+
     def log(self, text):
+        if not config.verbose:
+            return  # Only log if we are in debug mode
         if self.site:
             self.site.log.debug("%s:%s %s" % (self.ip, self.port, text))
         else:
@@ -58,6 +69,7 @@ class Peer(object):
 
         if connection:  # Connection specified
             self.connection = connection
+            self.connection.sites += 1
         else:  # Try to find from connection pool or create new connection
             self.connection = None
 
@@ -68,6 +80,7 @@ class Peer(object):
                     self.connection = self.site.connection_server.getConnection(self.ip, self.port, site=self.site)
                 else:
                     self.connection = sys.modules["main"].file_server.getConnection(self.ip, self.port, site=self.site)
+                self.connection.sites += 1
 
             except Exception, err:
                 self.onConnectionError()
@@ -81,6 +94,8 @@ class Peer(object):
             return self.connection
         else:  # Try to find from other sites connections
             self.connection = self.site.connection_server.getConnection(self.ip, self.port, create=False, site=self.site)
+            if self.connection:
+                self.connection.sites += 1
         return self.connection
 
     def __str__(self):
@@ -106,6 +121,8 @@ class Peer(object):
             if not self.connection:
                 self.onConnectionError()
                 return None  # Connection failed
+
+        self.log("Send request: %s %s" % (params.get("site", ""), cmd))
 
         for retry in range(1, 4):  # Retry 3 times
             try:
@@ -178,7 +195,7 @@ class Peer(object):
         while True:  # Read in 512k parts
             res = self.request("streamFile", {"site": site, "inner_path": inner_path, "location": location}, stream_to=buff)
 
-            if not res:  # Error
+            if not res or "location" not in res:  # Error
                 self.log("Invalid response: %s" % res)
                 return False
 
@@ -270,7 +287,15 @@ class Peer(object):
         res = self.request("findHashIds", {"site": self.site.address, "hash_ids": hash_ids})
         if not res or "error" in res:
             return False
-        return {key: map(helper.unpackAddress, val) for key, val in res["peers"].iteritems()}
+        # Unpack IP4
+        back = {key: map(helper.unpackAddress, val) for key, val in res["peers"].items()[0:30]}
+        # Unpack onion
+        for hash, onion_peers in res.get("peers_onion", {}).items()[0:30]:
+            if not hash in back:
+                back[hash] = []
+            back[hash] += map(helper.unpackOnionAddress, onion_peers)
+
+        return back
 
     # Send my hashfield to peer
     # Return: True if sent

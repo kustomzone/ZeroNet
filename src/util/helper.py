@@ -1,4 +1,5 @@
 import os
+import stat
 import socket
 import struct
 import re
@@ -6,19 +7,24 @@ import collections
 import time
 import logging
 import base64
+import gevent
+
+from Config import config
 
 
 def atomicWrite(dest, content, mode="w"):
     try:
-        with open(dest + "-new", mode) as f:
+        permissions = stat.S_IMODE(os.lstat(dest).st_mode)
+        with open(dest + "-tmpnew", mode) as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        if os.path.isfile(dest + "-old"):  # Previous incomplete write
-            os.rename(dest + "-old", dest + "-old-%s" % time.time())
-        os.rename(dest, dest + "-old")
-        os.rename(dest + "-new", dest)
-        os.unlink(dest + "-old")
+        if os.path.isfile(dest + "-tmpold"):  # Previous incomplete write
+            os.rename(dest + "-tmpold", dest + "-tmpold-%s" % time.time())
+        os.rename(dest, dest + "-tmpold")
+        os.rename(dest + "-tmpnew", dest)
+        os.chmod(dest, permissions)
+        os.unlink(dest + "-tmpold")
         return True
     except Exception, err:
         from Debug import Debug
@@ -26,8 +32,8 @@ def atomicWrite(dest, content, mode="w"):
             "File %s write failed: %s, reverting..." %
             (dest, Debug.formatException(err))
         )
-        if os.path.isfile(dest + "-old") and not os.path.isfile(dest):
-            os.rename(dest + "-old", dest)
+        if os.path.isfile(dest + "-tmpold") and not os.path.isfile(dest):
+            os.rename(dest + "-tmpold", dest)
         return False
 
 
@@ -36,9 +42,31 @@ def openLocked(path, mode="w"):
         import fcntl
         f = open(path, mode)
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif os.name == "nt":
+        import msvcrt
+        f = open(path, mode)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, -1)
     else:
         f = open(path, mode)
     return f
+
+
+def getFreeSpace():
+    free_space = -1
+    if "statvfs" in dir(os):  # Unix
+        statvfs = os.statvfs(config.data_dir)
+        free_space = statvfs.f_frsize * statvfs.f_bavail
+    else:  # Windows
+        try:
+            import ctypes
+            free_space_pointer = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                ctypes.c_wchar_p(config.data_dir), None, None, ctypes.pointer(free_space_pointer)
+            )
+            free_space = free_space_pointer.value
+        except Exception, err:
+            logging.error("GetFreeSpace error: %s" % err)
+    return free_space
 
 
 def shellquote(*args):
@@ -56,7 +84,7 @@ def packPeers(peers):
                 packed_peers["onion"].append(peer.packMyAddress())
             else:
                 packed_peers["ip4"].append(peer.packMyAddress())
-        except Exception, err:
+        except Exception:
             logging.error("Error packing peer address: %s" % peer)
     return packed_peers
 
@@ -86,16 +114,16 @@ def unpackOnionAddress(packed):
 # Get dir from file
 # Return: data/site/content.json -> data/site
 def getDirname(path):
-    file_dir = re.sub("[^/]*?$", "", path).rstrip("/")
-    if file_dir:
-        file_dir += "/"  # Add / at end if its not the root
-    return file_dir
+    if "/" in path:
+        return path[:path.rfind("/") + 1]
+    else:
+        return ""
 
 
 # Get dir from file
 # Return: data/site/content.json -> content.json
 def getFilename(path):
-    return re.sub("^.*/", "", path)
+    return path[path.rfind("/") + 1:]
 
 
 # Convert hash to hashid for hashfield
@@ -129,6 +157,9 @@ def httpRequest(url, as_file=False):
         conn.sock = ssl.wrap_socket(sock, conn.key_file, conn.cert_file)
         conn.request("GET", request)
         response = conn.getresponse()
+        if response.status in [301, 302, 303, 307, 308]:
+            logging.info("Redirect to: %s" % response.getheader('Location'))
+            response = httpRequest(response.getheader('Location'))
 
     if as_file:
         import cStringIO as StringIO
@@ -141,3 +172,12 @@ def httpRequest(url, as_file=False):
         return data
     else:
         return response
+
+
+def timerCaller(secs, func, *args, **kwargs):
+    gevent.spawn_later(secs, timerCaller, secs, func, *args, **kwargs)
+    func(*args, **kwargs)
+
+
+def timer(secs, func, *args, **kwargs):
+    gevent.spawn_later(secs, timerCaller, secs, func, *args, **kwargs)
